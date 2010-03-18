@@ -19,7 +19,6 @@
 
 require 'monitor'
 require 'logger'
-require 'sasl'
 
 module Qpid
 

@@ -18,7 +18,6 @@
 #
 
 require 'rbconfig'
-require 'sasl'
 
 module Qpid
 
@@ -177,17 +176,23 @@ module Qpid
       def initialize(connection, args)
         super(connection)
 
-        result = Sasl::client_init
+        begin
+          require 'sasl'
 
-        @mechanism= args[:mechanism]
-        @username = args[:username]
-        @password = args[:password]
-        @service = args[:service] || "qpidd"
-        @min_ssf = args[:min_ssf] || 0
-        @max_ssf = args[:max_ssf] || 65535
+          result = Sasl::client_init
 
-        @saslConn = Sasl.client_new(@mechanism, @service, args[:host],
-                                    @username, @password, @min_ssf, @max_ssf)
+          @mechanism= args[:mechanism]
+          @username = args[:username]
+          @password = args[:password]
+          @service = args[:service] || "qpidd"
+          @min_ssf = args[:min_ssf] || 0
+          @max_ssf = args[:max_ssf] || 65535
+
+          @saslConn = Sasl.client_new(@mechanism, @service, args[:host],
+                                      @username, @password, @min_ssf, @max_ssf)
+        rescue LoadError
+          puts "No SASL Support, unauthenticated connections only"
+        end
       end
 
       def start
@@ -196,24 +201,26 @@ module Qpid
       end
 
       def connection_start(ch, start)
-        mech_list = ""
-        start.mechanisms.each do |m|
-          mech_list += m + " "
-        end
-        begin
+        unless @saslConn
+          @connection.user_id = 'anonymous'
+          ch.connection_start_ok(:client_properties => PROPERTIES,
+                                 :mechanism => "ANONYMOUS",
+                                 :response => "#{@username}@#{`hostname`}")
+        else
+          mech_list = ""
+          start.mechanisms.each do |m|
+            mech_list += m + " "
+          end
           resp = Sasl.client_start(@saslConn, mech_list)
           @connection.user_id = Sasl.user_id(@saslConn)
           ch.connection_start_ok(:client_properties => PROPERTIES,
                                  :mechanism => resp[2],
                                  :response => resp[1])
-        rescue exception
-          ch.connection_close(:message => $!.message)
-          @connection.failed = true
-          @connection.signal
         end
       end
 
       def connection_secure(ch, secure)
+        raise "NO SASL! Connection terminated!" unless @saslConn
         resp = Sasl.client_step(@saslConn, secure.challenge)
         @connection.user_id = Sasl.user_id(@saslConn)
         ch.connection_secure_ok(:response => resp[1])
@@ -224,11 +231,11 @@ module Qpid
                               :max_frame_size => tune.max_frame_size,
                               :heartbeat => 0)
         ch.connection_open()
-        @connection.security_layer_tx = @saslConn
+        @connection.security_layer_tx = @saslConn if @saslConn
       end
 
       def connection_open_ok(ch, open_ok)
-        @connection.security_layer_rx = @saslConn
+        @connection.security_layer_rx = @saslConn if @saslConn
         @connection.opened = true
         @connection.signal
       end

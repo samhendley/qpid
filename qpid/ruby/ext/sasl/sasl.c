@@ -49,11 +49,6 @@ typedef struct {
 } context_t;
 
 //
-// Resolve forward references
-//
-static VALUE qsasl_free(int, VALUE*, VALUE);
-
-//
 // Validate an input string to ensure that it is either NULL or of reasonable size.
 //
 static int qsasl_valid(char* str)
@@ -155,6 +150,27 @@ static VALUE qsasl_client_init()
 }
 
 //
+// Free a SASL client context.
+//
+static void qsasl_free_context(context_t* context)
+{
+    if (context->conn)
+        sasl_dispose(&context->conn);
+    if (context->userName)
+        free(context->userName);
+    if (context->password)
+        free(context->password);
+    if (context->operUserName)
+        free(context->operUserName);
+    free(context);
+}
+
+static void qsasl_free(VALUE obj)
+{
+    qsasl_free_context(obj);
+}
+
+//
 // Allocate a new SASL client context.
 //
 static VALUE qsasl_client_new(int argc, VALUE *argv, VALUE obj)
@@ -241,7 +257,7 @@ static VALUE qsasl_client_new(int argc, VALUE *argv, VALUE obj)
 
     if (result != SASL_OK) {
         context->conn = 0;
-        qsasl_free(1, (VALUE*) &context, Qnil);
+        qsasl_free_context(context);
         rb_raise(rb_eRuntimeError, "sasl_client_new failed: %d - %s",
                  result, sasl_errstring(result, 0, 0));
     }
@@ -255,37 +271,12 @@ static VALUE qsasl_client_new(int argc, VALUE *argv, VALUE obj)
 
     result = sasl_setprop(context->conn, SASL_SEC_PROPS, &secprops);
     if (result != SASL_OK) {
-        qsasl_free(1, (VALUE*) &context, Qnil);
+        qsasl_free_context(context);
         rb_raise(rb_eRuntimeError, "sasl_setprop failed: %d - %s",
                  result, sasl_errdetail(context->conn));
     }
 
-    return (VALUE) context;
-}
-
-//
-// Free a SASL client context.
-//
-static VALUE qsasl_free(int argc, VALUE *argv, VALUE obj)
-{
-    context_t* context;
-
-    if (argc == 1)
-        context = (context_t*) argv[0];
-    else
-        rb_raise(rb_eRuntimeError, "Wrong Number of Arguments");
-
-    if (context->conn)
-        sasl_dispose(&context->conn);
-    if (context->userName)
-        free(context->userName);
-    if (context->password)
-        free(context->password);
-    if (context->operUserName)
-        free(context->operUserName);
-    free(context);
-
-    return Qnil;
+    return Data_Wrap_Struct(rb_cObject, 0, qsasl_free, context) ;
 }
 
 //
@@ -305,7 +296,7 @@ static VALUE qsasl_client_start(int argc, VALUE *argv, VALUE obj)
     const char* operName;
 
     if (argc == 2) {
-        context = (context_t*) argv[0];
+        context = (context_t*) DATA_PTR(argv[0]);
         mechList = StringValuePtr(argv[1]);
     } else
         rb_raise(rb_eRuntimeError, "Wrong Number of Arguments");
@@ -327,14 +318,11 @@ static VALUE qsasl_client_start(int argc, VALUE *argv, VALUE obj)
         rb_raise(rb_eRuntimeError, "sasl_client_start failed: %d - %s",
                  result, sasl_errdetail(context->conn));
 
-    if (result == SASL_OK) {
         propResult = sasl_getprop(context->conn, SASL_USERNAME, (const void**) &operName);
         if (propResult == SASL_OK) {
             context->operUserName = (char*) malloc(strlen(operName) + 1);
             strcpy(context->operUserName, operName);
         }
-    }
-
     return rb_ary_new3(3, INT2NUM(result), rb_str_new(response, len), rb_str_new2(chosen));
 }
 
@@ -353,7 +341,7 @@ static VALUE qsasl_client_step(int argc, VALUE *argv, VALUE obj)
     sasl_interact_t* interact = 0;
 
     if (argc == 2) {
-        context = (context_t*) argv[0];
+        context = (context_t*) DATA_PTR(argv[0]);
         challenge = argv[1];
     }
     else
@@ -371,14 +359,11 @@ static VALUE qsasl_client_step(int argc, VALUE *argv, VALUE obj)
     if (result != SASL_OK && result != SASL_CONTINUE)
         return QSASL_FAILED;
 
-    if (result == SASL_OK) {
         propResult = sasl_getprop(context->conn, SASL_USERNAME, (const void**) &operName);
         if (propResult == SASL_OK) {
             context->operUserName = (char*) malloc(strlen(operName) + 1);
             strcpy(context->operUserName, operName);
         }
-    }
-
     return rb_ary_new3(2, INT2NUM(result), rb_str_new(response, len));
 }
 
@@ -387,7 +372,7 @@ static VALUE qsasl_user_id(int argc, VALUE *argv, VALUE obj)
     context_t* context;
 
     if (argc == 1) {
-        context = (context_t*) argv[0];
+        context = (context_t*) DATA_PTR(argv[0]);
     } else {
         rb_raise(rb_eRuntimeError, "Wrong Number of Arguments");
     }
@@ -397,7 +382,6 @@ static VALUE qsasl_user_id(int argc, VALUE *argv, VALUE obj)
 
     return Qnil;
 }
-
 //
 // Encode transport data for the security layer.
 //
@@ -410,7 +394,7 @@ static VALUE qsasl_encode(int argc, VALUE *argv, VALUE obj)
     int result;
 
     if (argc == 2) {
-        context = (context_t*) argv[0];
+        context = (context_t*) DATA_PTR(argv[0]);
         clearText = argv[1];
     }
     else
@@ -438,7 +422,7 @@ static VALUE qsasl_decode(int argc, VALUE *argv, VALUE obj)
     int result;
 
     if (argc == 2) {
-        context = (context_t*) argv[0];
+        context = (context_t*) DATA_PTR(argv[0]);
         cipherText = argv[1];
     }
     else
@@ -463,7 +447,6 @@ void Init_sasl()
 
     rb_define_module_function(mSasl, "client_init", qsasl_client_init, -1);
     rb_define_module_function(mSasl, "client_new", qsasl_client_new, -1);
-    rb_define_module_function(mSasl, "free", qsasl_free, -1);
     rb_define_module_function(mSasl, "client_start", qsasl_client_start, -1);
     rb_define_module_function(mSasl, "client_step", qsasl_client_step, -1);
     rb_define_module_function(mSasl, "user_id", qsasl_user_id, -1);

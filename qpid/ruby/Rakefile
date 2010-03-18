@@ -24,7 +24,7 @@ require 'rake/gempackagetask'
 require 'pathname'
 
 PKG_NAME='ruby-qpid'
-PKG_VERSION='0.10.2'
+PKG_VERSION='0.10.4'
 GEM_NAME='qpid'
 
 EXT_CONF="ext/sasl/extconf.rb"
@@ -59,7 +59,7 @@ file SASL_MODULE => [ MAKEFILE, SASL_SRC ] do |t|
   end
 end
 desc "Build the native library and AMQP spec cache"
-task :build => :spec_cache
+task :build_native => :spec_cache
 
 Rake::TestTask.new(:test) do |t|
   t.test_files = FileList['tests/*.rb'].exclude("tests/util.rb")
@@ -81,16 +81,27 @@ task :spec_cache => SASL_MODULE do |t|
   Process.wait(pid)
 end
 
+desc "make a local copy of the xml spec files for inclusion into gem"
+task :copy_specs do |t|
+  FileUtils.mkdir_p('./specs')
+  FileList['../specs/*.xml'].each do |f|
+    FileUtils.cp(f, './specs')
+  end
+end
 #
 # Packaging
 #
 
-PKG_FILES = FileList[
-  "LICENSE.txt", "NOTICE.txt",
-  "Rakefile", "RELEASE_NOTES",
-  "lib/**/*.rb", "lib/*/spec_cache/*.rb*", "tests/**/*", "examples/**", "ext/**/*.[ch]",
-  "ext/**/MANIFEST", "ext/**/extconf.rb"
-]
+# this is a function rather than constant so we notice files added since the Rakefile
+# was loaded (like the copied specs)
+def file_list 
+  FileList[
+    "LICENSE.txt", "NOTICE.txt",
+    "Rakefile", "RELEASE_NOTES",
+    "lib/**/*.rb", "tests/**/*", "examples/**", "ext/**/*.[ch]",
+    "ext/**/MANIFEST", "ext/**/extconf.rb", "specs/*.xml"
+  ]
+end
 
 DIST_FILES = FileList[
   "pkg/*.tgz", "pkg/*.gem"
@@ -102,14 +113,34 @@ SPEC = Gem::Specification.new do |s|
   s.email = "qpid-dev@incubator.apache.org"
   s.homepage = "http://cwiki.apache.org/qpid/"
   s.summary = "Ruby client for Qpid"
-  s.files = PKG_FILES
+  s.files = file_list
   s.required_ruby_version = '>= 1.8.1'
   s.description = "Ruby client for Qpid"
   s.extensions << 'ext/sasl/extconf.rb'
 end
 
+
 Rake::GemPackageTask.new(SPEC) do |pkg|
   task pkg.package_dir => [ :spec_cache ]
   pkg.need_tar = true
-  pkg.need_zip = true
+  pkg.need_zip = false
+end
+
+begin
+  require 'jeweler'
+  Jeweler::Tasks.new do |s|
+    s.version = PKG_VERSION
+    s.name = GEM_NAME
+    s.summary = "Ruby client for Qpid"
+    s.email = "qpid-dev@incubator.apache.org"
+    s.homepage = "http://cwiki.apache.org/qpid/"
+    s.description = "Ruby client for Qpid"
+    s.authors = [""]
+    s.files = file_list
+    s.extensions << 'ext/sasl/extconf.rb'
+    s.required_ruby_version = '>= 1.8.1'
+  end
+
+rescue LoadError
+  puts "Jeweler, or one of its dependencies, is not available. Install it with: sudo gem install jeweler"
 end
